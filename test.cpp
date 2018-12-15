@@ -4,11 +4,11 @@
 template < int index >
 struct Hint{};
 
-ERASURE_MIXIN_METHOD( Callable, operator() );
-ERASURE_MIXIN_METHOD( Fooable, foo );
+RTCI_MIXIN_METHOD( Callable, operator() );
+RTCI_MIXIN_METHOD( Fooable, foo );
 
-using ImmutableObject = erasure::Immutable<Callable<int(int) const, int(Hint<1>,int) const>>;
-using MutableObject = erasure::Mutable<sizeof(void*)*2, Callable<int(int) const, int(Hint<1>,int) const, int(Hint<2>)>, Fooable<void()>>;
+using ImmutableObject = rtci_erasure::Immutable<Callable<int(int) const, int(Hint<1>,int) const>,Fooable<void()>>;
+//using MutableObject = rtci_erasure::Mutable<sizeof(void*)*2, Callable<int(int) const, int(Hint<1>,int) const, int(Hint<2>)>, Fooable<void()>>;
 
 
 struct Test {
@@ -27,9 +27,10 @@ int main()
     other( 5 );
     other( Hint<1>{}, 2 );
   }
+  /*
   {
     MutableObject object{ Test{} };
     object( Hint<2>{} );
-  }
+  }*/
   return 0;
 }

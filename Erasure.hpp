@@ -36,19 +36,24 @@
 /// for the runtime-concept idiom, and a macro for the boilerplate of making
 /// mixins. The implementations are suitable for use with regular types.
 ///
-namespace erasure {
+namespace rtci_erasure {
+
+  /// Placeholder structure for free function signatures.
+  ///
+  struct Placeholder {};
 
   /// Implementation details
   ///
   namespace detail {
 
-    enum class Operations {
+    enum class Op {
       CopyTo,
-      MoveTo
+      MoveTo,
+      Self,
     };
 
-    template < Operations >
-    struct Op {};
+    template < Op >
+    struct Hint {};
 
     /// Virtual Base class, provides virtual destructor.
     ///
@@ -58,8 +63,8 @@ namespace erasure {
     struct VirtualBase
     {
       /*
-      virtual void _operation( Op<CopyTo>, void *, size_t, size_t ) const = 0;
-      virtual void _operation( Op<MoveTo>, void *, size_t, size_t ) = 0;
+      virtual void _invoke( Hint<Op::CopyTo>, void *, size_t, size_t ) const = 0;
+      virtual void _invoke( Hint<Op::MoveTo>, void *, size_t, size_t ) = 0;
       */
       virtual ~VirtualBase() {}
     };
@@ -136,6 +141,27 @@ namespace erasure {
       std::unique_ptr<Object> object;
     };
 
+    template <typename Target, typename Replace, typename Check>
+    struct replace_with
+    {
+      using type = std::conditional_t<std::is_same_v<Original, Check>, Replace, Check>;
+    };
+
+    template <typename Target, typename Replace, typename Check>
+    using replace_with_t = typename replace_with<Target, Replace, Check>::type;
+
+    template <typename Target, typename Replace, typename Signature>
+    struct update_signature;
+
+    template <typename Target, typename Replace, typename Return, typename ...Args>
+    struct update_signature<Original, Replace, Return(Args...)>
+    {
+      using type = replace_with_t<Target, Replace, Return>( replace_with_t<Target, Replace, Args>...);
+    };
+
+    template <typename Target, typename Replace, typename Signature>
+    using update_signature_t = typename update_signature<Target, Replace, Signature>::type;
+
     /*
     template < typename Base, typename Internal, typename External >
     struct RegularOps : Base
@@ -165,6 +191,28 @@ namespace erasure {
      protected:
       using Base::self;
     }*/
+
+    namespace base_classes {
+
+      template < typename ...Mixins>
+      class Immutable {
+       public:
+        using Tag = Immutable<Mixins...>;
+        using Concept = detail::Concept<Tag, Mixins::template Concept...>;
+
+        template < typename Object >
+        using Model = typename detail::Compose<detail::InternalObject<Concept, std::decay_t<Object>>, Mixins::template Model...>::type;
+
+        template < typename Object >
+        Immutable( Object && other )
+        : object( std::make_shared<Model<Object>>( std::forward<Object>( other ) ) )
+        {}
+      protected:
+        const Concept & _invoke( Hint<Op::Self> ) const { return *object; }
+        std::shared_ptr<const Concept> object;
+      };
+
+    }
   } // namespace detail
 
   template < typename ...Mixins>
@@ -180,7 +228,7 @@ namespace erasure {
     Immutable( Object && other )
     : object( std::make_shared<Model<Object>>( std::forward<Object>( other ) ) )
     {}
-   //protected:
+   protected:
     const Concept & self() const { return *object; }
     std::shared_ptr<const Concept> object;
   };
@@ -227,14 +275,14 @@ namespace erasure {
   };
 }
 
-#define ERASURE_MIXIN_METHOD_QUALIFIERS( _name_, _method_, _qualifiers_ ) \
+#define RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, _qualifiers_ ) \
   template < typename ...Signatures > \
   struct _name_;  \
   \
   template < typename Return, typename ...Args, typename ...Signatures > \
   struct _name_<Return(Args...) _qualifiers_, Signatures...> { \
   \
-    template < typename Derived > \
+    template < typename Base > \
     struct Container : _name_<Signatures...>::template Container<Derived> \
     { \
       using Parent = typename _name_<Signatures...>::template Container<Derived>; \
@@ -379,10 +427,10 @@ namespace erasure {
       using Base::self; \
     };  \
   }
-// #define ERASURE_MIXIN_METHOD_QUALIFIERS(...)
+// #define RTCI_MIXIN_METHOD_QUALIFIERS(...)
 
 
-#define ERASURE_MIXIN_METHOD( _name_, _method_ ) \
-  ERASURE_MIXIN_METHOD_QUALIFIERS( _name_, _method_, ); \
-  ERASURE_MIXIN_METHOD_QUALIFIERS( _name_, _method_, const )
+#define RTCI_MIXIN_METHOD( _name_, _method_ ) \
+  RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, ); \
+  RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, const )
 
