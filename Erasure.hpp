@@ -42,18 +42,20 @@ namespace rtci_erasure {
   ///
   struct Placeholder {};
 
-  /// Implementation details
+  /// Implementation detail
   ///
   namespace detail {
 
-    enum class Op {
-      CopyTo,
-      MoveTo,
-      Self,
-    };
+    namespace hint {
 
-    template < Op >
-    struct Hint {};
+      struct Self{};
+
+      template < typename ... >
+      struct Method {};
+
+      template < typename ... >
+      struct Function {};
+    }
 
     /// Virtual Base class, provides virtual destructor.
     ///
@@ -62,10 +64,7 @@ namespace rtci_erasure {
     template < typename Tag >
     struct VirtualBase
     {
-      /*
-      virtual void _invoke( Hint<Op::CopyTo>, void *, size_t, size_t ) const = 0;
-      virtual void _invoke( Hint<Op::MoveTo>, void *, size_t, size_t ) = 0;
-      */
+      inline void invoke_method( hint::Method<Tag> ) const {}
       virtual ~VirtualBase() {}
     };
 
@@ -92,55 +91,72 @@ namespace rtci_erasure {
       using type = Last<Initial>;
     };
 
-    /// Interface type combining all mixins.
-    ///
-    /// TODO: Filter redundant types.
-    ///
-    template < typename Tag, template <typename> class ...Concepts >
-    using Concept = typename Compose<VirtualBase<Tag>, Concepts... >::type;
+    namespace storage {
+      enum class Method
+      {
+        Internal,
+        External
+      };
 
-    /// Inheritance mix-in that stores an object internally.
-    ///
-    /// @tparam Interface Concept to inherit/implement.
-    /// @tparam Object Type to store internally.
-    ///
-    template < typename Interface, typename Object >
-    class InternalObject : public Interface {
-     public:    
-      template <typename ...Args>
-      InternalObject( Args && ...args )
-      : object( std::forward<Args>( args )... )
-      {}
+      template < typename Base, typename Object, Method Method >
+      class Storage;
 
-     protected:
-      Object & self() { return object; }
-      const Object & self() const { return object; }
+      /// Inheritance mix-in that stores an object externally.
+      ///
+      /// @tparam Base Class to inherit/implement.
+      /// @tparam Object Type to store externally.
+      ///
+      template < typename Base, typename Object >
+      class Storage<Base, Object, Method::External> : public Base {
+       public:
+        using Base::invoke_method;
 
-     private:
-      Object object;
-    };
+        template < typename ...Args >
+        Storage( Args && ...args )
+        : object( std::make_unique<Object>( std::forward<Args>( args )... ) )
+        {}
 
-    /// Inheritance mix-in that stores an object externally.
-    ///
-    /// @tparam Interface Concept to inherit/implement.
-    /// @tparam Object Type to store externally.
-    ///
-    template < typename Interface, typename Object >
-    class ExternalObject : public Interface {
-     public:    
-      template <typename ...Args>
-      ExternalObject( Args && ...args )
-      : object( std::make_unique<Object>( std::forward<Args>( args )... ) )
-      {}
+       protected:
+        Object & invoke_method( hint::Self ) { return *object; }
+        const Object & invoke_method( hint::Self ) const { return *object; }
 
-     protected:
-      Object & self() { return *object; }
-      const Object & self() const { return *object; }
+       private:
+        std::unique_ptr<Object> object;
+      };
 
-     private:
-      std::unique_ptr<Object> object;
-    };
+      /// Inheritance mix-in that stores an object internally.
+      ///
+      /// @tparam Base Class to inherit/implement.
+      /// @tparam Object Type to store internally.
+      ///
+      template < typename Base, typename Object >
+      class Storage<Base, Object, Method::Internal> : public Base {
+       public:
+        using Base::invoke_method;
 
+        template < typename ...Args >
+        Storage( Args && ...args )
+        : object( std::forward<Args>( args )... )
+        {}
+
+       protected:
+        Object & invoke_method( hint::Self ) { return object; }
+        const Object & invoke_method( hint::Self ) const { return object; }
+
+       private:
+        Object object;
+      };    
+
+      template < typename Base, typename Object, size_t Capacity >
+      struct Select {
+        using Internal = Storage<Base, Object, Method::Internal>;
+        using External = Storage<Base, Object, Method::External>;
+        using type = std::conditional_t<(sizeof(Internal) <= Capacity), Internal, External>;
+        static_assert( sizeof(type) <= Capacity, "Capacity too small for any storage method!" );
+      };
+    }
+
+    /*
     template <typename Target, typename Replace, typename Check>
     struct replace_with
     {
@@ -161,118 +177,76 @@ namespace rtci_erasure {
 
     template <typename Target, typename Replace, typename Signature>
     using update_signature_t = typename update_signature<Target, Replace, Signature>::type;
+    */
 
-    /*
-    template < typename Base, typename Internal, typename External >
-    struct RegularOps : Base
-    {
-      void _operation( Op<CopyTo>, void * storage, size_t capacity, size_t alignment ) const final
-      {
-        if( sizeof(Internal) <= capacity && alignof(Internal) <= alignment )
-        {
-          new (storage) Internal{ self() };
-        }
-        else
-        {
-          new (storage) External{ self(); };
-        }
-      }
-      void _operation( Op<MoveTo>, void * storage, size_t capacity, size_t alignment ) final
-      {
-        if( sizeof(Internal) <= capacity && alignof(Internal) <= alignment )
-        {
-          new (storage) Internal{ self() };
-        }
-        else
-        {
-          new (storage) External{ self(); };
-        }
-      }
-     protected:
-      using Base::self;
-    }*/
-
-    namespace base_classes {
-
-      template < typename ...Mixins>
+    namespace base {
+      
+      template < typename ...Mixins >
       class Immutable {
        public:
-        using Tag = Immutable<Mixins...>;
-        using Concept = detail::Concept<Tag, Mixins::template Concept...>;
-
         template < typename Object >
-        using Model = typename detail::Compose<detail::InternalObject<Concept, std::decay_t<Object>>, Mixins::template Model...>::type;
-
-        template < typename Object >
-        Immutable( Object && other )
-        : object( std::make_shared<Model<Object>>( std::forward<Object>( other ) ) )
+        Immutable( Object && object )
+        : object_( std::make_shared<Model<Object>>( std::forward<Object>( object ) ) )
         {}
-      protected:
-        const Concept & _invoke( Hint<Op::Self> ) const { return *object; }
-        std::shared_ptr<const Concept> object;
+
+       protected:
+        using Tag = Immutable<Mixins...>;
+        using Concept = typename Compose< VirtualBase<Tag>, Mixins::template Concept...>::type;
+
+        template < typename Object >
+        using Storage = storage::Storage<Concept, std::decay_t<Object>, storage::Method::Internal>;
+
+        template < typename Object >
+        using Model = typename Compose< Storage<Object>, Mixins::template Model...>::type;
+
+        const Concept & invoke_method( hint::Self ) const { return *object_; }
+       private:
+        std::shared_ptr<const Concept> object_;
       };
 
+      template < size_t Capacity, typename ...Mixins >
+      class Mutable {
+       public:
+        template < typename Object >
+        Mutable( Object && object )
+        {
+          new (&storage_) Model<Object>{ std::forward<Object>( object ) };
+        }
+
+        ~Mutable()
+        {
+          reinterpret_cast<Concept*>( &storage_ )->~Concept();
+        }
+
+        Mutable( const Mutable & other ) = delete;
+        Mutable( Mutable && other ) = delete;
+
+        Mutable & operator = ( const Mutable & other ) = delete;
+        Mutable & operator = ( Mutable && other ) = delete;
+
+       protected:
+        using Tag = Immutable<Mixins...>;
+        using Concept = typename Compose< VirtualBase<Tag>, Mixins::template Concept...>::type;
+
+        template < typename Object >
+        using Storage = typename storage::Select<Concept, std::decay_t<Object>, Capacity>::type;
+
+        template < typename Object >
+        using Model = typename Compose< Storage<Object>, Mixins::template Model...>::type;
+
+        const Concept & invoke_method( hint::Self ) const { return *reinterpret_cast<const Concept*>( &storage_ ); }
+        Concept & invoke_method( hint::Self ) { return *reinterpret_cast<Concept*>( &storage_ ); }
+       private:
+        std::aligned_storage_t< Capacity, alignof(Concept) > storage_;
+      };
     }
   } // namespace detail
 
-  template < typename ...Mixins>
-  class Immutable : public Mixins::template Container<Immutable<Mixins...>>... {
-   public:
-    using Tag = Immutable<Mixins...>;
-    using Concept = detail::Concept<Tag, Mixins::template Concept...>;
+  template < typename ...Mixins >
+  using Immutable = typename detail::Compose< detail::base::Immutable<Mixins...>, Mixins::template Container... >::type;
 
-    template < typename Object >
-    using Model = typename detail::Compose<detail::InternalObject<Concept, std::decay_t<Object>>, Mixins::template Model...>::type;
-
-    template < typename Object >
-    Immutable( Object && other )
-    : object( std::make_shared<Model<Object>>( std::forward<Object>( other ) ) )
-    {}
-   protected:
-    const Concept & self() const { return *object; }
-    std::shared_ptr<const Concept> object;
-  };
-
-  template < size_t Capacity, typename ...Mixins>
-  class Mutable : public Mixins::template Container<Mutable<Capacity, Mixins...>>... {
-   public:
-    using Tag = Mutable<Capacity, Mixins...>;
-    using Concept = detail::Concept<Tag, Mixins::template Concept...>;
-
-    template < typename Object, template <typename, typename> class Storage >
-    using Prototype = typename detail::Compose<Storage<Concept, Object>, Mixins::template Model...>::type;
-
-    template < typename Object, bool Fits = (
-      alignof(Prototype<Object, detail::InternalObject>) <= alignof(Concept) &&
-      sizeof(Prototype<Object, detail::InternalObject>) <= Capacity)>
-    struct ModelSelect
-    {
-      using type = Prototype<Object, detail::InternalObject>;
-    };
-
-    template < typename Object >
-    struct ModelSelect<Object, false>
-    {
-      using type = Prototype<Object, detail::ExternalObject>;
-    };
-
-    template < typename Object >
-    using Model = typename ModelSelect<std::decay_t<Object>>::type;
-
-    template < typename Object >
-    Mutable( Object && object )
-    {
-      static_assert( sizeof(Model<Object>) <= Capacity, "Mutable erasrue capacity too small!" );
-      new ( &self() ) Model<Object>{ std::forward<Object>( object ) };
-    }
-
-    ~Mutable() { self().~Concept(); }
-
-   //protected:
-    std::aligned_storage_t< Capacity, alignof(Concept) > storage;
-    const Concept & self() const { return *reinterpret_cast<const Concept*>(&storage); }
-    Concept & self() { return *reinterpret_cast<Concept*>(&storage); }
-  };
+  template < size_t Capacity, typename ...Mixins >
+  using Mutable = typename detail::Compose< detail::base::Mutable<Capacity, Mixins...>, Mixins::template Container... >::type;
 }
 
 #define RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, _qualifiers_ ) \
@@ -280,17 +254,20 @@ namespace rtci_erasure {
   struct _name_;  \
   \
   template < typename Return, typename ...Args, typename ...Signatures > \
-  struct _name_<Return(Args...) _qualifiers_, Signatures...> { \
-  \
+  struct _name_<Return(Args...) _qualifiers_, Signatures...> \
+  { \
     template < typename Base > \
-    struct Container : _name_<Signatures...>::template Container<Derived> \
+    struct Container : _name_<Signatures...>::template Container<Base> \
     { \
-      using Parent = typename _name_<Signatures...>::template Container<Derived>; \
-      using Parent::_method_;\
+      using Parent = typename _name_<Signatures...>::template Container<Base>; \
+      using Parent::Parent; \
+      using Parent::invoke_method; \
+      using Parent::_method_; \
       \
       Return _method_( Args ...args ) _qualifiers_ \
       { \
-        return static_cast< _qualifiers_ Derived&>(*this).self()._method_( std::forward<Args>( args )... ); \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        return self.invoke_method( ::rtci_erasure::detail::hint::Method<_name_>{}, std::forward<Args>( args )... ); \
       } \
     }; \
     \
@@ -298,9 +275,9 @@ namespace rtci_erasure {
     struct Concept : _name_<Signatures...>::template Concept<Base> \
     { \
       using Parent = typename _name_<Signatures...>::template Concept<Base>; \
-      using Parent::_method_; \
+      using Parent::invoke_method; \
       \
-      virtual Return _method_( Args ...args ) _qualifiers_ = 0; \
+      virtual Return invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ = 0; \
     }; \
     \
     template < typename Base > \
@@ -308,30 +285,32 @@ namespace rtci_erasure {
     { \
       using Parent = typename _name_<Signatures...>::template Model<Base>; \
       using Parent::Parent; \
+      using Parent::invoke_method; \
       \
-      Return _method_( Args ...args ) _qualifiers_ final \
+      Return invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ final \
       { \
-        return self()._method_( std::forward<Args>( args )... ); \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        return self._method_( std::forward<Args>( args )... ); \
       } \
-    \
-     protected: \
-      using Parent::self; \
     };  \
   };  \
   \
   \
   template < typename ...Args, typename ...Signatures > \
-  struct _name_<void(Args...) _qualifiers_, Signatures...> { \
-  \
-    template < typename Derived > \
-    struct Container : _name_<Signatures...>::template Container<Derived> \
+  struct _name_<void(Args...) _qualifiers_, Signatures...> \
+  { \
+    template < typename Base > \
+    struct Container : _name_<Signatures...>::template Container<Base> \
     { \
-      using Parent = typename _name_<Signatures...>::template Container<Derived>; \
-      using Parent::_method_;\
+      using Parent = typename _name_<Signatures...>::template Container<Base>; \
+      using Parent::Parent; \
+      using Parent::invoke_method; \
+      using Parent::_method_; \
       \
       void _method_( Args ...args ) _qualifiers_ \
       { \
-        static_cast< _qualifiers_ Derived&>(*this).self()._method_( std::forward<Args>( args )... ); \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        self.invoke_method( ::rtci_erasure::detail::hint::Method<_name_>{}, std::forward<Args>( args )... ); \
       } \
     }; \
     \
@@ -339,9 +318,10 @@ namespace rtci_erasure {
     struct Concept : _name_<Signatures...>::template Concept<Base> \
     { \
       using Parent = typename _name_<Signatures...>::template Concept<Base>; \
-      using Parent::_method_; \
+      using Parent::Parent; \
+      using Parent::invoke_method; \
       \
-      virtual void _method_( Args ...args ) _qualifiers_ = 0; \
+      virtual void invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ = 0; \
     }; \
     \
     template < typename Base > \
@@ -349,82 +329,95 @@ namespace rtci_erasure {
     { \
       using Parent = typename _name_<Signatures...>::template Model<Base>; \
       using Parent::Parent; \
+      using Parent::invoke_method; \
       \
-      void _method_( Args ...args ) _qualifiers_ final \
+      void invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ final \
       { \
-        self()._method_( std::forward<Args>( args )... ); \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        self._method_( std::forward<Args>( args )... ); \
       } \
-    \
-     protected: \
-      using Parent::self; \
     };  \
   };  \
   \
   \
   template < typename Return, typename ...Args > \
-  struct _name_<Return(Args...) _qualifiers_> { \
-  \
-    template < typename Derived > \
-    struct Container \
+  struct _name_<Return(Args...) _qualifiers_> \
+  { \
+    template < typename Base > \
+    struct Container : Base \
     { \
+      using Parent = Base; \
+      using Parent::Parent; \
+      using Parent::invoke_method; \
+      \
       Return _method_( Args ...args ) _qualifiers_ \
       { \
-        return static_cast< _qualifiers_ Derived&>(*this).self()._method_( std::forward<Args>( args )... ); \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        return self.invoke_method( ::rtci_erasure::detail::hint::Method<_name_>{}, std::forward<Args>( args )... ); \
       } \
     }; \
     \
     template < typename Base > \
     struct Concept : Base \
     { \
-      virtual Return _method_( Args ...args ) _qualifiers_ = 0; \
+      using Parent = Base; \
+      using Parent::invoke_method; \
+      virtual Return invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ = 0; \
     }; \
     \
     template < typename Base > \
     struct Model : Base \
     { \
-      using Base::Base; \
+      using Parent = Base; \
+      using Parent::Parent; \
+      using Parent::invoke_method; \
       \
-      Return _method_( Args ...args ) _qualifiers_ final \
+      Return invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ final \
       { \
-        return self()._method_( std::forward<Args>( args )... ); \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        return self._method_( std::forward<Args>( args )... ); \
       } \
-    \
-     protected: \
-      using Base::self; \
     };  \
   };  \
   \
   \
   template < typename ...Args > \
-  struct _name_<void(Args...) _qualifiers_> { \
-    \
-    template < typename Derived > \
-    struct Container  \
+  struct _name_<void(Args...) _qualifiers_> \
+  { \
+    template < typename Base > \
+    struct Container : Base \
     { \
-      void _method_( Args ...args ) _qualifiers_  \
+      using Parent = Base; \
+      using Parent::Parent; \
+      using Parent::invoke_method; \
+      \
+      void _method_( Args ...args ) _qualifiers_ \
       { \
-        static_cast< _qualifiers_ Derived&>(*this).self()._method_( std::forward<Args>( args )... );  \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        self.invoke_method( ::rtci_erasure::detail::hint::Method<_name_>{}, std::forward<Args>( args )... ); \
       } \
     }; \
     \
-    template < typename Base >  \
+    template < typename Base > \
     struct Concept : Base \
     { \
-      virtual void _method_( Args ...args ) _qualifiers_ = 0; \
-    };  \
+      using Parent = Base; \
+      using Parent::invoke_method; \
+      virtual void invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ = 0; \
+    }; \
     \
-    template < typename Base >  \
+    template < typename Base > \
     struct Model : Base \
     { \
-      using Base::Base; \
+      using Parent = Base; \
+      using Parent::Parent; \
+      using Parent::invoke_method; \
       \
-      void _method_( Args ...args ) _qualifiers_ final  \
+      void invoke_method( ::rtci_erasure::detail::hint::Method<_name_>, Args ...args ) _qualifiers_ final \
       { \
-        self()._method_( std::forward<Args>( args )... ); \
+        _qualifiers_ auto & self = invoke_method( ::rtci_erasure::detail::hint::Self{} ); \
+        self._method_( std::forward<Args>( args )... ); \
       } \
-    \
-     protected: \
-      using Base::self; \
     };  \
   }
 // #define RTCI_MIXIN_METHOD_QUALIFIERS(...)
