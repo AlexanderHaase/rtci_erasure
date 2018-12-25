@@ -7,7 +7,7 @@ struct Hint{};
 RTCI_MIXIN_METHOD( Callable, operator() );
 RTCI_MIXIN_METHOD( Fooable, foo );
 
-using ImmutableObject = rtci_erasure::Immutable<Callable<int(Hint<1>,int) const, int(int) const>/*,Fooable<void()>*/>;
+using ImmutableObject = rtci_erasure::Immutable<Callable<int(Hint<1>,int) const, int(int) const>,Fooable<void() const>>;
 using MutableObject = rtci_erasure::Mutable<sizeof(void*)*2, Callable<int(int) const, int(Hint<1>,int) const, int(Hint<2>)>, Fooable<void()>>;
 
 struct Test {
@@ -22,13 +22,22 @@ int main()
   {
     ImmutableObject object{ Test{} };
     object( 10 );
+    std::cout << rtci_erasure::inspect( object ).name() << std::endl;
     ImmutableObject other = std::move(object);
+    std::cout << rtci_erasure::inspect( object ).name() << std::endl;
     other( 5 );
     other( Hint<1>{}, 2 );
+    other.foo();
+    ImmutableObject empty{};
+    std::cout << rtci_erasure::inspect( empty ).name() << std::endl;
   }
   {
     MutableObject object{ Test{} };
     object( Hint<2>{} );
+    object.foo();
+    std::cout << rtci_erasure::inspect( object ).name() << std::endl;
+    MutableObject empty{};
+    std::cout << rtci_erasure::inspect( empty ).name() << std::endl;
   }
   return 0;
 }

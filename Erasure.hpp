@@ -50,6 +50,12 @@ namespace rtci_erasure {
 
       struct Self{};
 
+      struct Type{};
+
+      struct Copy{};
+
+      struct Move{};
+
       template < typename ... >
       struct Method {};
 
@@ -64,8 +70,9 @@ namespace rtci_erasure {
     template < typename Tag >
     struct VirtualBase
     {
-      inline void invoke_method( hint::Method<Tag> ) const {}
       virtual ~VirtualBase() {}
+      //inline void invoke_method( hint::Method<Tag> ) const {}
+      virtual const std::type_info & invoke_method( hint::Type ) const = 0;
     };
 
     /// Template composition
@@ -92,29 +99,23 @@ namespace rtci_erasure {
     };
 
     namespace storage {
-      enum class Method
-      {
-        Internal,
-        External
-      };
-
-      template < typename Base, typename Object, Method Method >
-      class Storage;
-
+     
       /// Inheritance mix-in that stores an object externally.
       ///
       /// @tparam Base Class to inherit/implement.
       /// @tparam Object Type to store externally.
       ///
       template < typename Base, typename Object >
-      class Storage<Base, Object, Method::External> : public Base {
+      class External : public Base {
        public:
         using Base::invoke_method;
 
         template < typename ...Args >
-        Storage( Args && ...args )
+        External( Args && ...args )
         : object( std::make_unique<Object>( std::forward<Args>( args )... ) )
         {}
+
+        const std::type_info & invoke_method( hint::Type ) const final { return typeid(Object); }
 
        protected:
         Object & invoke_method( hint::Self ) { return *object; }
@@ -130,14 +131,16 @@ namespace rtci_erasure {
       /// @tparam Object Type to store internally.
       ///
       template < typename Base, typename Object >
-      class Storage<Base, Object, Method::Internal> : public Base {
+      class Internal : public Base {
        public:
         using Base::invoke_method;
 
         template < typename ...Args >
-        Storage( Args && ...args )
+        Internal( Args && ...args )
         : object( std::forward<Args>( args )... )
         {}
+
+        const std::type_info & invoke_method( hint::Type ) const final { return typeid(Object); }
 
        protected:
         Object & invoke_method( hint::Self ) { return object; }
@@ -149,10 +152,18 @@ namespace rtci_erasure {
 
       template < typename Base, typename Object, size_t Capacity >
       struct Select {
-        using Internal = Storage<Base, Object, Method::Internal>;
-        using External = Storage<Base, Object, Method::External>;
-        using type = std::conditional_t<(sizeof(Internal) <= Capacity), Internal, External>;
+        using Int = Internal<Base, Object>;
+        using Ext = External<Base, Object>;
+        using type = std::conditional_t<(sizeof(Int) <= Capacity), Int, Ext>;
         static_assert( sizeof(type) <= Capacity, "Capacity too small for any storage method!" );
+      };
+
+      /// Empty object that can be constructed.
+      ///
+      template < typename Base >
+      struct Empty : Base
+      {
+        const std::type_info & invoke_method( hint::Type ) const final { return typeid(nullptr); }
       };
     }
 
@@ -184,17 +195,24 @@ namespace rtci_erasure {
       template < typename ...Mixins >
       class Immutable {
        public:
+        Immutable() = default;
+
         template < typename Object >
         Immutable( Object && object )
         : object_( std::make_shared<Model<Object>>( std::forward<Object>( object ) ) )
         {}
+
+        const std::type_info & invoke_method( hint::Type ) const
+        {
+          return object_ ? invoke_method( hint::Self{} ).invoke_method( hint::Type{} ) : typeid(nullptr);
+        }
 
        protected:
         using Tag = Immutable<Mixins...>;
         using Concept = typename Compose< VirtualBase<Tag>, Mixins::template Concept...>::type;
 
         template < typename Object >
-        using Storage = storage::Storage<Concept, std::decay_t<Object>, storage::Method::Internal>;
+        using Storage = storage::Internal<Concept, std::decay_t<Object>>;
 
         template < typename Object >
         using Model = typename Compose< Storage<Object>, Mixins::template Model...>::type;
@@ -207,6 +225,12 @@ namespace rtci_erasure {
       template < size_t Capacity, typename ...Mixins >
       class Mutable {
        public:
+
+        Mutable()
+        {
+          new(&storage_) Empty{};
+        }
+
         template < typename Object >
         Mutable( Object && object )
         {
@@ -215,7 +239,7 @@ namespace rtci_erasure {
 
         ~Mutable()
         {
-          reinterpret_cast<Concept*>( &storage_ )->~Concept();
+          reinterpret_cast<BaseType*>( &storage_ )->~BaseType();
         }
 
         Mutable( const Mutable & other ) = delete;
@@ -224,12 +248,20 @@ namespace rtci_erasure {
         Mutable & operator = ( const Mutable & other ) = delete;
         Mutable & operator = ( Mutable && other ) = delete;
 
+        const std::type_info & invoke_method( hint::Type ) const
+        {
+          return invoke_method( hint::Self{} ).invoke_method( hint::Type{} );
+        }
+
        protected:
         using Tag = Immutable<Mixins...>;
+        using BaseType = VirtualBase<Tag>;
+        using Empty = storage::Empty<BaseType>;
         using Concept = typename Compose< VirtualBase<Tag>, Mixins::template Concept...>::type;
+        static constexpr size_t storage_capacity_ = sizeof(Concept) + Capacity;
 
         template < typename Object >
-        using Storage = typename storage::Select<Concept, std::decay_t<Object>, Capacity>::type;
+        using Storage = typename storage::Select<Concept, std::decay_t<Object>, storage_capacity_>::type;
 
         template < typename Object >
         using Model = typename Compose< Storage<Object>, Mixins::template Model...>::type;
@@ -237,7 +269,7 @@ namespace rtci_erasure {
         const Concept & invoke_method( hint::Self ) const { return *reinterpret_cast<const Concept*>( &storage_ ); }
         Concept & invoke_method( hint::Self ) { return *reinterpret_cast<Concept*>( &storage_ ); }
        private:
-        std::aligned_storage_t< Capacity, alignof(Concept) > storage_;
+        std::aligned_storage_t< storage_capacity_, alignof(Concept) > storage_;
       };
     }
   } // namespace detail
@@ -247,6 +279,12 @@ namespace rtci_erasure {
 
   template < size_t Capacity, typename ...Mixins >
   using Mutable = typename detail::Compose< detail::base::Mutable<Capacity, Mixins...>, Mixins::template Container... >::type;
+
+  template < typename Object >
+  const std::type_info & inspect( Object && object )
+  {
+    return object.invoke_method( detail::hint::Type{} );
+  }
 }
 
 #define RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, _qualifiers_ ) \
