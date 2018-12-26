@@ -71,8 +71,44 @@ namespace rtci_erasure {
     struct VirtualBase
     {
       virtual ~VirtualBase() {}
-      //inline void invoke_method( hint::Method<Tag> ) const {}
       virtual const std::type_info & invoke_method( hint::Type ) const = 0;
+    };
+
+    struct Movable
+    {
+      //using Storage = std::aligned_storage<Capacity, alignof(VirtualBase<Movable>)>;
+
+      /*
+      template < typename Base >
+      struct Container : Base
+      {
+        using Base::Base;
+        using Base::invoke_method;
+
+        Container( Container && other )
+        {
+        }
+      };
+      */
+
+      template < typename Base >
+      struct Concept : Base
+      {
+        using Base::Base;
+        using Base::invoke_method;
+        virtual void invoke_method( hint::Move, void * storage ) = 0;
+      };
+
+      template < typename Base >
+      struct Model final : Base
+      {
+        using Base::Base;
+        using Base::invoke_method;
+        void invoke_method( hint::Move, void * storage ) final
+        {
+          new (storage) Model{ std::move(*this) };
+        }
+      };
     };
 
     /// Template composition
@@ -148,13 +184,20 @@ namespace rtci_erasure {
 
        private:
         Object object;
-      };    
+      };
+
+      template < typename T >
+      struct is_movable
+      {
+        static constexpr bool value = std::is_move_constructible<T>::value
+          && std::is_move_assignable<T>::value;
+      };
 
       template < typename Base, typename Object, size_t Capacity >
       struct Select {
-        using Int = Internal<Base, Object>;
-        using Ext = External<Base, Object>;
-        using type = std::conditional_t<(sizeof(Int) <= Capacity), Int, Ext>;
+        using InternalType = Internal<Base, Object>;
+        using ExternalType = External<Base, Object>;
+        using type = std::conditional_t<(sizeof(InternalType) <= Capacity && is_movable<Object>::value), InternalType, ExternalType>;
         static_assert( sizeof(type) <= Capacity, "Capacity too small for any storage method!" );
       };
 
@@ -243,10 +286,18 @@ namespace rtci_erasure {
         }
 
         Mutable( const Mutable & other ) = delete;
-        Mutable( Mutable && other ) = delete;
+        Mutable( Mutable && other )
+        {
+          other.invoke_method( hint::Self{} ).invoke_method( hint::Move{}, &storage_ );
+        }
 
         Mutable & operator = ( const Mutable & other ) = delete;
-        Mutable & operator = ( Mutable && other ) = delete;
+        Mutable & operator = ( Mutable && other )    
+        {
+          reinterpret_cast<BaseType*>( &storage_ )->~BaseType();
+          other.invoke_method( hint::Self{} ).invoke_method( hint::Move{}, &storage_ );
+          return *this;
+        }
 
         const std::type_info & invoke_method( hint::Type ) const
         {
@@ -257,14 +308,14 @@ namespace rtci_erasure {
         using Tag = Immutable<Mixins...>;
         using BaseType = VirtualBase<Tag>;
         using Empty = storage::Empty<BaseType>;
-        using Concept = typename Compose< VirtualBase<Tag>, Mixins::template Concept...>::type;
-        static constexpr size_t storage_capacity_ = sizeof(Concept) + Capacity;
+        static constexpr size_t storage_capacity_ = sizeof(BaseType) + Capacity;
+        using Concept = typename Compose< VirtualBase<Tag>, Mixins::template Concept..., Movable::template Concept>::type;
 
         template < typename Object >
         using Storage = typename storage::Select<Concept, std::decay_t<Object>, storage_capacity_>::type;
 
         template < typename Object >
-        using Model = typename Compose< Storage<Object>, Mixins::template Model...>::type;
+        using Model = typename Compose< Storage<Object>, Mixins::template Model..., Movable::template Model>::type;
 
         const Concept & invoke_method( hint::Self ) const { return *reinterpret_cast<const Concept*>( &storage_ ); }
         Concept & invoke_method( hint::Self ) { return *reinterpret_cast<Concept*>( &storage_ ); }
@@ -287,7 +338,7 @@ namespace rtci_erasure {
   }
 }
 
-#define RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, _qualifiers_ ) \
+#define RTCI_METHOD_TEMPLATE_QUALIFIERS( _name_, _method_, _qualifiers_ ) \
   template < typename ...Signatures > \
   struct _name_;  \
   \
@@ -458,10 +509,10 @@ namespace rtci_erasure {
       } \
     };  \
   }
-// #define RTCI_MIXIN_METHOD_QUALIFIERS(...)
+// #define RTCI_METHOD_TEMPLATE_QUALIFIERS(...)
 
 
-#define RTCI_MIXIN_METHOD( _name_, _method_ ) \
-  RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, ); \
-  RTCI_MIXIN_METHOD_QUALIFIERS( _name_, _method_, const )
+#define RTCI_METHOD_TEMPLATE( _name_, _method_ ) \
+  RTCI_METHOD_TEMPLATE_QUALIFIERS( _name_, _method_, ); \
+  RTCI_METHOD_TEMPLATE_QUALIFIERS( _name_, _method_, const )
 
