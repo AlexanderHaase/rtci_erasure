@@ -64,6 +64,13 @@ struct type_traits
   static constexpr type_modifier modifier = type_modifier::NONE;  ///< Current modifier.
   static constexpr size_t count = 0;                              ///< Number of modifiers.
   
+  /// Apply the current modifier to the specified type.
+  ///
+  /// @tparam U type to modify
+  ///
+  template < typename U >
+  using modify = U;
+
   /// Copy modifiers to another arbitrary type.
   ///
   /// @tparam U type to copy modifiers to.
@@ -71,17 +78,27 @@ struct type_traits
   template < typename U >
   using rebase = U;
 
-  /// Determine if the specified type is contained
+  /// Determine if the specified type is this type.
   ///
   /// @tparam R type to test.
   ///
   template < typename R >
-  static constexpr bool contains = std::is_same<R,T>::value;
+  static constexpr bool is_same = std::is_same<R,type>::value;
+
+  /// Determine if the specified type is contained within this type.
+  ///
+  /// @tparam R type to test.
+  ///
+  template < typename R >
+  static constexpr bool contains = std::is_same<R,type>::value;
 
   /// Copy modifiers up to the specified base
   ///
+  /// @tparam R type to use as a base for rewriting.
+  /// @tparam U type to rebase from R.
+  ///
   template < typename R, typename U >
-  using rewrite = std::enable_if_t<std::is_same<R, type>::value, U>;  
+  using rebase_from = std::conditional_t<is_same<R>, U, void>;
 };
 
 /// Specialization for pointer modifier.
@@ -96,7 +113,19 @@ struct type_traits<T*>
   static constexpr size_t count = next::count + 1;
 
   template < typename U >
-  using rebase = std::add_pointer_t< typename next::template rebase<U> >;
+  using modify = std::add_pointer_t< U >;
+
+  template < typename U >
+  using rebase = modify< typename next::template rebase<U> >;
+
+  template < typename R >
+  static constexpr bool is_same = std::is_same<type, R>::value;
+
+  template < typename R >
+  static constexpr bool contains = is_same<R> || next::template contains<R>;
+
+  template < typename R, typename U >
+  using rebase_from = std::conditional_t<is_same<R>, U, modify<typename next::template rebase_from<R, U>>>;
 };
 
 /// Specialization for lvalue reference modifier.
@@ -111,7 +140,19 @@ struct type_traits<T&>
   static constexpr size_t count = next::count + 1;
 
   template < typename U >
-  using rebase = std::add_lvalue_reference_t< typename next::template rebase<U> >;
+  using modify = std::add_lvalue_reference_t< U >;
+
+  template < typename U >
+  using rebase = modify< typename next::template rebase<U> >;
+
+  template < typename R >
+  static constexpr bool is_same = std::is_same<type, R>::value;
+
+  template < typename R >
+  static constexpr bool contains = is_same<R> || next::template contains<R>;
+
+  template < typename R, typename U >
+  using rebase_from = std::conditional_t<is_same<R>, U, modify<typename next::template rebase_from<R, U>>>;
 };
 
 /// Specialization for rvalue_reference modifier.
@@ -126,7 +167,19 @@ struct type_traits<T&&>
   static constexpr size_t count = next::count + 1;
 
   template < typename U >
-  using rebase = std::add_rvalue_reference_t< typename next::template rebase<U> >;
+  using modify = std::add_rvalue_reference_t< U >;
+
+  template < typename U >
+  using rebase = modify< typename next::template rebase<U> >;
+
+  template < typename R >
+  static constexpr bool is_same = std::is_same<type, R>::value;
+
+  template < typename R >
+  static constexpr bool contains = is_same<R> || next::template contains<R>;
+
+  template < typename R, typename U >
+  using rebase_from = std::conditional_t<is_same<R>, U, modify<typename next::template rebase_from<R, U>>>;
 };
 
 /// Specialization for const modifier.
@@ -141,7 +194,19 @@ struct type_traits<const T>
   static constexpr size_t count = next::count + 1;
 
   template < typename U >
-  using rebase = std::add_const_t< typename next::template rebase<U> >;
+  using modify = std::add_const_t< U >;
+
+  template < typename U >
+  using rebase = modify< typename next::template rebase<U> >;
+
+  template < typename R >
+  static constexpr bool is_same = std::is_same<type, R>::value;
+
+  template < typename R >
+  static constexpr bool contains = is_same<R> || next::template contains<R>;
+
+  template < typename R, typename U >
+  using rebase_from = std::conditional_t<is_same<R>, U, modify<typename next::template rebase_from<R, U>>>;
 };
 
 /// Specialization for volatile modifier.
@@ -156,7 +221,19 @@ struct type_traits<volatile T>
   static constexpr size_t count = next::count + 1;
 
   template < typename U >
-  using rebase = std::add_volatile_t< typename next::template rebase<U> >;
+  using modify = std::add_volatile_t< U >;
+
+  template < typename U >
+  using rebase = modify< typename next::template rebase<U> >;
+
+  template < typename R >
+  static constexpr bool is_same = std::is_same<type, R>::value;
+
+  template < typename R >
+  static constexpr bool contains = is_same<R> || next::template contains<R>;
+
+  template < typename R, typename U >
+  using rebase_from = std::conditional_t<is_same<R>, U, modify<typename next::template rebase_from<R, U>>>;
 };
 
 /// Specialization for array modifier.
@@ -172,11 +249,24 @@ struct type_traits<T[N]>
   static constexpr size_t count = next::count + 1;
 
   template < typename U >
-  using rebase = typename next::template rebase<U>[N];
+  using modify = U[N];
+
+  template < typename U >
+  using rebase = modify< typename next::template rebase<U> >;
+
+  template < typename R >
+  static constexpr bool is_same = std::is_same<type, R>::value;
+
+  template < typename R >
+  static constexpr bool contains = is_same<R> || next::template contains<R>;
+
+  template < typename R, typename U >
+  using rebase_from = std::conditional_t<is_same<R>, U, modify<typename next::template rebase_from<R, U>>>;
 };
 
 static_assert( type_traits<int*>::count == 1, "type check!" );
 static_assert( std::is_same<type_traits<int*>::rebase<float>,float*>::value, "type check!" );
+static_assert( std::is_same<type_traits<int**>::rebase_from<int*, float>,float*>::value, "type check!" );
 static_assert( type_traits<volatile int*const*[10]>::count == 5, "type check!" );
 static_assert( std::is_same<type_traits<volatile int*const*[10]>::rebase<float>,volatile float*const*[10]>::value, "type check!" );
 
@@ -187,8 +277,7 @@ struct replace {
   struct apply {
     using T1 = type_traits<Target>;
     using T2 = type_traits<Test>;
-    static constexpr bool match = std::is_same< typename T1::type, typename T2::type >::value;
-    using type = std::conditional_t< match, typename T2::template rebase<With>, Test >;
+    using type = std::conditional_t< T2::template contains<Target>, typename T2::template rebase_from<Target, With>, Test >;
   };
 
   template <typename Test>
