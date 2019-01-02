@@ -319,6 +319,11 @@ namespace rtci_erasure {
 
         const Concept & invoke_method( hint::Self ) const { return *reinterpret_cast<const Concept*>( &storage_ ); }
         Concept & invoke_method( hint::Self ) { return *reinterpret_cast<Concept*>( &storage_ ); }
+
+        //using StorageEquivalent
+
+        static_assert(sizeof(BaseType)==sizeof(Concept), "Shouldn't add storage");
+        static_assert(sizeof(Empty)==sizeof(Concept), "Shouldn't add storage");
        private:
         std::aligned_storage_t< storage_capacity_, alignof(Concept) > storage_;
       };
