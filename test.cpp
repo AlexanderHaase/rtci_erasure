@@ -11,6 +11,12 @@ void tprint( First && first, Rest && ...rest )
   tprint( std::forward<Rest>( rest )... );
 }
 
+template < typename T, T Value >
+struct Literal
+{
+  static constexpr T value = Value;
+};
+
 template < typename ...Args >
 struct List
 {
@@ -316,42 +322,56 @@ struct UpdateSequence<Base, Template, Final, Signature>
 {
   using type = Template< Base, typename placeholder_for<Final>::template signature_t<Signature> >;
 };
-/*
+
+
+template < size_t ...Prior, size_t Last>
+auto iterate( std::index_sequence<Prior...>, std::index_sequence<Last> )
+{
+  std::cout << Last << std::endl;
+  return std::index_sequence<Prior..., Last>{};
+}
+
+template < size_t ...Prior, size_t Current, size_t ...Remainder >
+auto iterate( std::index_sequence<Prior...>, std::index_sequence<Current, Remainder...> )
+-> decltype( iterate( std::index_sequence<Prior..., Current>{}, std::index_sequence<Remainder...>{} ))
+{
+  std::cout << Current << ", ";
+  return iterate( std::index_sequence<Prior..., Current>{}, std::index_sequence<Remainder...>{} );
+}
+
 template < typename First, typename ...Args >
-auto get_index( std::index_sequence<0>, First && first, Args && ... )
-  -> First
+auto get_index( Literal<size_t, 0>, First && first, Args && ... )
 {
   return first;
 }
 
 template < size_t Index, typename First, typename ...Args >
-auto get_index( std::index_sequence<Index>, First &&, Args && ... args )
-  -> decltype(get_index<Index-1, Args...>( std::index_sequence<Index-1>{}, std::forward<Args>(args)... ))
+auto get_index( Literal<size_t, Index>, First &&, Args && ... args )
+  -> decltype(get_index( Literal<size_t, Index-1>{}, std::forward<Args>(args)... ))
 {
-  return get_index<Index-1, Args...>( std::index_sequence<Index-1>{}, std::forward<Args>(args)... );
+  return get_index( Literal<size_t, Index-1>{}, std::forward<Args>(args)... );
 }
 
 template < size_t Select, typename A, typename ...Args >
-auto forward_at( std::index_sequence<Select>, std::index_sequence<Select>, A && a, Args && ... )
+auto forward_at( Literal<size_t, Select>, Literal<size_t, Select>, A && a, Args && ... )
   -> A
 {
   return a;
 }
 
 template < size_t Select, size_t Index, typename A, typename ...Args >
-auto forward_at( std::index_sequence<Select>, std::index_sequence<Index>, A &&, Args && ...args )
-  -> std::enable_if_t<(Select < Index), decltype(get_index(std::index_sequence<Index>{}, std::forward<Args>(args)...))>
+auto forward_at( Literal<size_t, Select>, Literal<size_t, Index>, A &&, Args && ...args )
+  -> std::enable_if_t<(Select < Index), decltype(get_index(Literal<size_t, Index>{}, std::forward<Args>(args)...))>
 {
-  return get_index(std::index_sequence<Index>{}, std::forward<Args>(args)...);
+  return get_index(Literal<size_t, Index>{}, std::forward<Args>(args)...);
 }
 
 template < size_t Select, size_t Index, typename A, typename ...Args >
 auto forward_at( std::index_sequence<Select>, std::index_sequence<Index>, A &&, Args && ...args )
-  -> std::enable_if_t<(Select > Index), decltype(get_index(std::index_sequence<Index+1>{}, std::forward<Args>(args)...))>
+  -> std::enable_if_t<(Select > Index), decltype(get_index(Literal<size_t, Index+1>{}, std::forward<Args>(args)...))>
 {
-  return get_index(std::index_sequence<Index+1>{}, std::forward<Args>(args)...);
+  return get_index(Literal<size_t, Index+1>{}, std::forward<Args>(args)...);
 }
-*/
 
 template < typename T >
 using Functor = replace<Placeholder,int>::template apply_t<T>;
@@ -387,38 +407,6 @@ struct FriendWrapper
 template < typename ...Signatures >
 struct Friend : FriendWrapper<Signatures...>::type {};
 
-/*
-template < typename Base, typename ...Args >
-class FriendImpl : Base {
-
-  friend void foo( Args ...args )
-  {
-    std::cout << "Foo: ";
-    tprint( std::forward<Args>( args )... );
-    std::cout << std::endl;
-  }
-};
-
-template < typename ...Signatures >
-class Friend;
-
-template <>
-class Friend<> {};
-
-template < typename ...Args >
-class Friend<void(Args...)> : public FriendImpl<Friend<>, (replace<Placeholder,Friend<void(Args...)>>::template apply_t<Args>)...>
-{
-
-};
-
-
-template < typename ...Args, typename ...Signatures >
-class Friend<void(Args...), Signatures...> : public FriendImpl<Friend<Signatures...>, (replace<Placeholder,Friend<void(Args...)>>::template apply_t<Args>)...>
-{
-
-};
-*/
-
 template < int index >
 struct Hint{};
 
@@ -449,8 +437,9 @@ int main()
     Friend<void(Placeholder), void(Placeholder, int)> fred{};
     foo( fred );
     foo( fred, 1 );
-    //std::cout << get_index( std::index_sequence<2>{}, 0, 1, 2, 3 ) << std::endl;
-    //std::cout << forward_at( std::index_sequence<2>{}, std::index_sequence<2>{}, 0, 1, 2, 3 ) << std::endl;
+    //iterate( std::index_sequence<>{}, std::index_sequence<0, 1, 2, 3>{} );
+    std::cout << get_index( Literal<size_t, 2>{}, 0, 1, 2, 3 ) << std::endl;
+    std::cout << forward_at( Literal<size_t, 2>{}, Literal<size_t, 2>{}, 0, 1, 2, 3 ) << std::endl;
   }
   {
     ImmutableObject object{ Test1{} };
